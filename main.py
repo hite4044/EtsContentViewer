@@ -1,11 +1,13 @@
-import wx
-import re
 import json
-from os import walk
+import re
 from ctypes import windll
 from datetime import datetime
-from widget import CenteredStaticText, ft
+from os import walk
 from os.path import getmtime, join as path_join, expandvars, isdir
+
+import wx
+
+from widget import CenteredStaticText, ft
 
 GetSystemMetrics = windll.user32.GetSystemMetrics
 MAX_SIZE = (GetSystemMetrics(0), GetSystemMetrics(1))
@@ -58,10 +60,12 @@ class ContentJsonViewer(wx.Panel):
 
         self.top_sizer = wx.BoxSizer(wx.HORIZONTAL)
         self.back_btn = wx.Button(self, label="返回")
-        self.forward_btn = wx.Button(self, label="前进")
+        self.use_simple_output = wx.CheckBox(self, label="简略输出")
         self.content_dir_text = CenteredStaticText(self, label="当前目录：")
+        self.forward_btn = wx.Button(self, label="前进")
         self.content_dir_text.SetMinSize((MAX_SIZE[0], -1))
         self.top_sizer.Add(self.back_btn, proportion=0)
+        self.top_sizer.Add(self.use_simple_output, proportion=0)
         self.top_sizer.Add(self.content_dir_text, flag=wx.EXPAND, proportion=1)
         self.top_sizer.Add(self.forward_btn, proportion=0)
         self.sizer.Add(self.top_sizer, proportion=0)
@@ -72,11 +76,15 @@ class ContentJsonViewer(wx.Panel):
 
         self.font_size = self.json_viewer.GetFont().GetPointSize()
         self.back_btn.Bind(wx.EVT_BUTTON, self.prev_content)
+        self.use_simple_output.Bind(wx.EVT_CHECKBOX, self.on_check)
         self.forward_btn.Bind(wx.EVT_BUTTON, self.next_content)
         self.content_dir_text.Bind(wx.EVT_LEFT_DOWN, self.popup_choose_menu)
-        self.json_viewer.Bind(wx.EVT_KEY_DOWN, lambda e:self.on_key_down(e, True))
-        self.json_viewer.Bind(wx.EVT_KEY_UP, lambda e:self.on_key_down(e, False))
+        self.json_viewer.Bind(wx.EVT_KEY_DOWN, lambda e: self.on_key_down(e, True))
+        self.json_viewer.Bind(wx.EVT_KEY_UP, lambda e: self.on_key_down(e, False))
         self.json_viewer.Bind(wx.EVT_MOUSEWHEEL, self.on_scroll)
+
+    def on_check(self, _):
+        self.content_change()
 
     def on_key_down(self, event: wx.KeyEvent, down_up: bool):
         if event.GetKeyCode() == wx.WXK_CONTROL:
@@ -137,9 +145,51 @@ class ContentJsonViewer(wx.Panel):
         return True
 
     def content_change(self):
+        if not self.contents:
+            return
         self.content_dir_text.SetLabel(f"当前目录：{self.content_names[self.content_index]}")
         self.top_sizer.Layout()
-        self.json_viewer.SetValue(json.dumps(self.contents[self.content_index], indent=4, ensure_ascii=False))
+        content = self.contents[self.content_index]
+
+        if not self.use_simple_output.IsChecked():
+            self.json_viewer.SetValue(json.dumps(content, indent=4, ensure_ascii=False))
+            return
+
+        output = ""
+        if not (info := content.get("info")):
+            wx.MessageBox("试题损坏, 或者不支持简化该种试题的答案")
+            return
+        if value := info.get("value"):
+            value = value.replace("<p>", "")
+            value = value.replace("</p>", "\n")
+            output += "试题内容" + "\n"
+            output += value
+            output += "=" * 20 + "\n"
+            output += "\n"
+
+        def warp(cnt):
+            if cnt:
+                return [{"std": cnt}]
+            return None
+        if (questions := info.get("question")) or (questions := warp(info.get("std"))):
+            output += "试题答案" + "\n"
+            for question in questions:
+                ask = str(question.get("ask"))
+                ask = re.sub(r"ets_th\d", "", ask)
+                ask = ask.replace("<br>", "")
+                ask = ask.replace("? (", "?\n--Options: (")
+                output += "问题：" + ask + "\n"
+                for answer in question.get("std"):
+                    answer = str(answer.get("value"))
+                    answer = answer.replace("</br>", "")
+                    if len(answer) > 150:
+                        output += answer.replace(". ", ".\n") + "\n\n"
+                    else:
+                        output += answer + "\n"
+                output += "\n"
+
+
+        self.json_viewer.SetValue(output)
 
     def init_data(self, dir_path: str):
         self.content_names.clear()
@@ -208,7 +258,7 @@ class Viewer(wx.Frame):
             if re.match(match_pattern, dir_name):
                 self.load_dir(path_join(roaming_dir, dir_name))
                 return
-        
+
         if isdir(path_join(roaming_dir, "ETS")):
             self.load_dir(path_join(roaming_dir, "ETS"))
         else:
